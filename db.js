@@ -1,5 +1,6 @@
 // db.js
-// Database connection and query interface (supports PostgreSQL and SQLite fallback)
+// Database connection and query interface
+// Supports PostgreSQL (via pg) when DATABASE_URL is set, and pure-JS persistent storage fallback.
 
 require("dotenv").config();
 const fs = require("fs");
@@ -8,7 +9,7 @@ const path = require("path");
 let pool;
 
 if (process.env.DATABASE_URL) {
-  // Production / PostgreSQL mode (e.g. Render PostgreSQL)
+  // Production PostgreSQL mode (Render PostgreSQL / Neon / Supabase)
   const { Pool } = require("pg");
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -34,102 +35,156 @@ if (process.env.DATABASE_URL) {
     }
   })();
 } else {
-  // Local development fallback using SQLite
-  const sqlite3 = require("sqlite3").verbose();
-  const dbFile = path.join(__dirname, "records.db");
-  const sqliteDb = new sqlite3.Database(dbFile);
+  // Pure JavaScript persistent storage (Zero GLIBC / zero native dependencies)
+  // Perfectly compatible with Render Free Linux and local environments
+  const dataFile = path.join(__dirname, "records.json");
 
-  // Initialize SQLite schema and initial seed
-  sqliteDb.serialize(() => {
-    sqliteDb.run(`
-      CREATE TABLE IF NOT EXISTS records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        category TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL
-      )
-    `);
+  const INITIAL_SEEDS = [
+    {
+      id: 1,
+      title: "Broken fluorescent light fixture",
+      category: "Electrical",
+      description: "The ceiling fluorescent tube in Lecture Hall 2 flickers constantly and makes a buzzing sound.",
+      status: "Pending"
+    },
+    {
+      id: 2,
+      title: "Leaking faucet in washroom",
+      category: "Plumbing",
+      description: "The cold water tap in the 2nd floor Engineering block restroom leaks heavily when turned off.",
+      status: "In progress"
+    },
+    {
+      id: 3,
+      title: "Damaged study desk in Library",
+      category: "Furniture",
+      description: "Desk number 14 has a broken leg and wobbles severely, making it unsafe for student use.",
+      status: "Pending"
+    },
+    {
+      id: 4,
+      title: "Air conditioner failure in Lab 3",
+      category: "Electrical",
+      description: "The main split-unit AC in Computer Lab 3 is blowing warm air and showing error code E4.",
+      status: "In progress"
+    },
+    {
+      id: 5,
+      title: "Blocked drain outside Cafeteria",
+      category: "Plumbing",
+      description: "Rainwater drain next to the main cafeteria entrance is blocked by debris causing flooding.",
+      status: "Completed"
+    },
+    {
+      id: 6,
+      title: "Broken whiteboard frame in Room B12",
+      category: "Furniture",
+      description: "The mounting bracket on the left side of the whiteboard has detached from the wall.",
+      status: "Pending"
+    },
+    {
+      id: 7,
+      title: "Loose power socket at study pod",
+      category: "Electrical",
+      description: "The wall outlet near Pod 4 is loose and sparks intermittently when laptop chargers are plugged in.",
+      status: "Completed"
+    },
+    {
+      id: 8,
+      title: "Damaged auditorium seat hinge",
+      category: "Furniture",
+      description: "Seat 45 in Row F cannot stay folded and the armrest has cracked off.",
+      status: "Pending"
+    }
+  ];
 
-    sqliteDb.get("SELECT COUNT(*) AS count FROM records", (err, row) => {
-      if (!err && row && row.count === 0) {
-        const stmt = sqliteDb.prepare(
-          "INSERT INTO records (title, category, description, status) VALUES (?, ?, ?, ?)"
-        );
-        const seeds = [
-          ["Broken fluorescent light fixture", "Electrical", "The ceiling fluorescent tube in Lecture Hall 2 flickers constantly and makes a buzzing sound.", "Pending"],
-          ["Leaking faucet in washroom", "Plumbing", "The cold water tap in the 2nd floor Engineering block restroom leaks heavily when turned off.", "In progress"],
-          ["Damaged study desk in Library", "Furniture", "Desk number 14 has a broken leg and wobbles severely, making it unsafe for student use.", "Pending"],
-          ["Air conditioner failure in Lab 3", "Electrical", "The main split-unit AC in Computer Lab 3 is blowing warm air and showing error code E4.", "In progress"],
-          ["Blocked drain outside Cafeteria", "Plumbing", "Rainwater drain next to the main cafeteria entrance is blocked by debris causing flooding.", "Completed"],
-          ["Broken whiteboard frame in Room B12", "Furniture", "The mounting bracket on the left side of the whiteboard has detached from the wall.", "Pending"],
-          ["Loose power socket at study pod", "Electrical", "The wall outlet near Pod 4 is loose and sparks intermittently when laptop chargers are plugged in.", "Completed"],
-          ["Damaged auditorium seat hinge", "Furniture", "Seat 45 in Row F cannot stay folded and the armrest has cracked off.", "Pending"]
-        ];
-        seeds.forEach(s => stmt.run(s));
-        stmt.finalize();
-        console.log("SQLite: 8 initial records seeded.");
-      }
-    });
-  });
+  function readData() {
+    if (!fs.existsSync(dataFile)) {
+      fs.writeFileSync(dataFile, JSON.stringify(INITIAL_SEEDS, null, 2), "utf-8");
+      return [...INITIAL_SEEDS];
+    }
+    try {
+      const content = fs.readFileSync(dataFile, "utf-8");
+      return JSON.parse(content || "[]");
+    } catch {
+      return [...INITIAL_SEEDS];
+    }
+  }
 
-  // Adapter providing pool.query interface compatible with pg
+  function writeData(records) {
+    fs.writeFileSync(dataFile, JSON.stringify(records, null, 2), "utf-8");
+  }
+
   pool = {
-    query(sql, params = []) {
-      return new Promise((resolve, reject) => {
-        const trimmed = sql.trim();
-        const upper = trimmed.toUpperCase();
+    async query(sql, params = []) {
+      const upper = sql.trim().toUpperCase();
+      const records = readData();
 
-        // Convert PostgreSQL $1, $2, ... to SQLite ?
-        const sqliteSql = trimmed
-          .replace(/\$\d+/g, "?")
-          .replace(/RETURNING\s+\*/i, "")
-          .replace(/RETURNING\s+id/i, "")
-          .trim();
+      // 1. Health check: SELECT 1
+      if (upper === "SELECT 1" || upper.startsWith("SELECT 1")) {
+        return { rows: [{ "?column?": 1 }], rowCount: 1 };
+      }
 
-        if (upper.startsWith("SELECT")) {
-          sqliteDb.all(sqliteSql, params, (err, rows) => {
-            if (err) return reject(err);
-            resolve({ rows: rows || [], rowCount: (rows || []).length });
-          });
-        } else if (upper.startsWith("INSERT")) {
-          sqliteDb.run(sqliteSql, params, function (err) {
-            if (err) return reject(err);
-            const insertedId = this.lastID;
-            sqliteDb.get("SELECT * FROM records WHERE id = ?", [insertedId], (gErr, row) => {
-              if (gErr) return reject(gErr);
-              resolve({ rows: [row], rowCount: 1 });
-            });
-          });
-        } else if (upper.startsWith("UPDATE")) {
-          sqliteDb.run(sqliteSql, params, function (err) {
-            if (err) return reject(err);
-            const changes = this.changes;
-            if (changes === 0) {
-              return resolve({ rows: [], rowCount: 0 });
-            }
-            // The id is the last parameter in UPDATE ... WHERE id = $5
-            const id = params[params.length - 1];
-            sqliteDb.get("SELECT * FROM records WHERE id = ?", [id], (gErr, row) => {
-              if (gErr) return reject(gErr);
-              resolve({ rows: row ? [row] : [], rowCount: changes });
-            });
-          });
-        } else if (upper.startsWith("DELETE")) {
-          sqliteDb.run(sqliteSql, params, function (err) {
-            if (err) return reject(err);
-            const changes = this.changes;
-            const id = params[0];
-            resolve({ rows: changes > 0 ? [{ id }] : [], rowCount: changes });
-          });
-        } else {
-          // DDL statements
-          sqliteDb.run(sqliteSql, params, function (err) {
-            if (err) return reject(err);
-            resolve({ rows: [], rowCount: this.changes });
-          });
+      // 2. SELECT all: SELECT id, title, category, description, status FROM records ORDER BY id
+      if (upper.startsWith("SELECT") && !upper.includes("WHERE")) {
+        const sorted = [...records].sort((a, b) => a.id - b.id);
+        return { rows: sorted, rowCount: sorted.length };
+      }
+
+      // 3. SELECT one: SELECT id, title, category, description, status FROM records WHERE id = $1
+      if (upper.startsWith("SELECT") && upper.includes("WHERE ID =")) {
+        const id = Number(params[0]);
+        const record = records.find(r => r.id === id);
+        return { rows: record ? [record] : [], rowCount: record ? 1 : 0 };
+      }
+
+      // 4. INSERT: INSERT INTO records (title, category, description, status) VALUES ($1, $2, $3, $4) RETURNING *
+      if (upper.startsWith("INSERT")) {
+        const maxId = records.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0);
+        const newRecord = {
+          id: maxId + 1,
+          title: params[0],
+          category: params[1],
+          description: params[2],
+          status: params[3]
+        };
+        records.push(newRecord);
+        writeData(records);
+        return { rows: [newRecord], rowCount: 1 };
+      }
+
+      // 5. UPDATE: UPDATE records SET title = $1, category = $2, description = $3, status = $4 WHERE id = $5 RETURNING *
+      if (upper.startsWith("UPDATE")) {
+        const id = Number(params[4]);
+        const index = records.findIndex(r => r.id === id);
+        if (index === -1) {
+          return { rows: [], rowCount: 0 };
         }
-      });
+        const updatedRecord = {
+          id,
+          title: params[0],
+          category: params[1],
+          description: params[2],
+          status: params[3]
+        };
+        records[index] = updatedRecord;
+        writeData(records);
+        return { rows: [updatedRecord], rowCount: 1 };
+      }
+
+      // 6. DELETE: DELETE FROM records WHERE id = $1 RETURNING id
+      if (upper.startsWith("DELETE")) {
+        const id = Number(params[0]);
+        const index = records.findIndex(r => r.id === id);
+        if (index === -1) {
+          return { rows: [], rowCount: 0 };
+        }
+        records.splice(index, 1);
+        writeData(records);
+        return { rows: [{ id }], rowCount: 1 };
+      }
+
+      return { rows: [], rowCount: 0 };
     }
   };
 }
