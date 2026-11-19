@@ -32,17 +32,17 @@ function validateRecordBody(body) {
   const { title, category, description, status } = body;
 
   // Check types before trimming
-  if (typeof title !== "string") {
-    return { valid: false, message: "Title is required and must be a string." };
+  if (typeof title !== "string" || title.trim().length === 0) {
+    return { valid: false, message: "Title must have 3 to 80 characters." };
   }
-  if (typeof category !== "string") {
-    return { valid: false, message: "Category is required and must be a string." };
+  if (typeof category !== "string" || category.trim().length === 0) {
+    return { valid: false, message: "Category must have 2 to 40 characters." };
   }
-  if (typeof description !== "string") {
-    return { valid: false, message: "Description is required and must be a string." };
+  if (typeof description !== "string" || description.trim().length === 0) {
+    return { valid: false, message: "Description must have 5 to 300 characters." };
   }
-  if (typeof status !== "string") {
-    return { valid: false, message: "Status is required and must be a string." };
+  if (typeof status !== "string" || status.trim().length === 0) {
+    return { valid: false, message: "Status must be one of: Pending, In progress, Completed." };
   }
 
   const trimmedTitle = title.trim();
@@ -52,13 +52,13 @@ function validateRecordBody(body) {
 
   // Length and format rules
   if (trimmedTitle.length < 3 || trimmedTitle.length > 80) {
-    return { valid: false, message: "Title must have between 3 and 80 characters." };
+    return { valid: false, message: "Title must have 3 to 80 characters." };
   }
   if (trimmedCategory.length < 2 || trimmedCategory.length > 40) {
-    return { valid: false, message: "Category must have between 2 and 40 characters." };
+    return { valid: false, message: "Category must have 2 to 40 characters." };
   }
   if (trimmedDescription.length < 5 || trimmedDescription.length > 300) {
-    return { valid: false, message: "Description must have between 5 and 300 characters." };
+    return { valid: false, message: "Description must have 5 to 300 characters." };
   }
   if (!VALID_STATUSES.includes(trimmedStatus)) {
     return { valid: false, message: "Status must be one of: Pending, In progress, Completed." };
